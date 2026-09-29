@@ -311,6 +311,7 @@ table.gs{width:100%;border-collapse:collapse;table-layout:fixed;border:.5mm soli
       <button class="tb-btn" id="btnRedo" data-action="redo" title="Redo (Ctrl+Y)" disabled>↷ Redo</button>
       <button class="tb-btn" data-action="new-project">New project</button>
       <button class="tb-btn" data-action="export-json" title="Download this project as a file to share or back up">Export</button>
+      <button class="tb-btn" data-action="import-pdf" title="Read a Sage quotation PDF back into a quote">Import Sage PDF</button>
       <button class="tb-btn" data-action="import-json" title="Open a project file exported from this tool">Import</button>
       <button class="tb-btn" data-action="settings">Settings</button>
       <button class="tb-btn primary" data-action="preview">Preview &amp; print</button>
@@ -1111,6 +1112,7 @@ function renderModal(){
       '<label class="fld" style="margin-top:10px"><span>Rows</span><textarea rows="10" data-s="modal" data-f="text" placeholder="ASST022&#9;Asili Charcoal Classic - Compact Tile&#9;530&#10;ASST023&#9;Asili Green Classic - Compact Tile&#9;530">' + esc(m.text) + '</textarea></label>',
       '<button class="btn" data-action="modal-close">Cancel</button><button class="btn primary" data-action="bulk-ok">Add to library</button>', true);
   else if(m.type === 'settings') html = settingsModalHTML();
+  else if(m.type === 'pdf') html = pdfModalHTML(m);
   else if(m.type === 'projects') html = projectsModalHTML();
   root.innerHTML = html;
   if(m.type === 'heavy') refreshModalCalc();
@@ -1143,6 +1145,43 @@ function refreshModalCalc(){
   const set = (k, v) => { const el = $('[data-mcalc="' + k + '"]'); if(el) el.textContent = v; };
   set('len', r.lenTot ? fmt(r.lenTot, 2) + ' m' : '—'); set('kgm', r.kgm ? fmt(r.kgm, 3) : '—');
   set('kg', fmt(r.kg, 3)); set('amount', fmt(r.amount, 2));
+}
+function pdfModalHTML(m){
+  if(m.stage === 'reading') return modalShell('Reading the Sage PDF', esc(m.file || ''), '<div class="empty">Working through the pages\u2026</div>', '');
+  if(m.stage === 'failed') return modalShell('Could not read that PDF', '',
+    '<div class="help" style="background:#fdeceb;border-color:#f0b4b0;color:#7a1c16">' + esc(m.error) + '</div>' +
+    '<p class="hint">This reads the text Sage puts in the file. A scanned or photographed quote has no text in it and cannot be read.</p>',
+    '<button class="btn primary" data-action="modal-close">Close</button>');
+  const r = m.res;
+  const gap = r.stated.sub == null ? null : r2(r.computed - r.stated.sub);
+  const rows = r.lines.map((l, i) => '<tr><td class="idx">' + (i + 1) + '</td><td><b>' + esc(l.code || '\u2014') + '</b></td><td>' + esc(l.desc) +
+      (l.detail.length ? '<br><small style="color:#1f3fbf">' + l.detail.map(esc).join('<br>') + '</small>' : '') + '</td>' +
+      '<td class="r">' + fmt(l.qty, 2) + '</td><td class="r">' + fmt(l.excl) + '</td><td class="r">' + (num(l.disc) ? fmt(l.disc, 2) : '') + '</td>' +
+      '<td class="r">' + fmt(l.net) + '</td><td class="r"><b>' + fmt(r2(num(l.qty) * num(l.net))) + '</b></td></tr>').join('');
+  const body =
+    '<div class="grid g4" style="margin-bottom:10px">' +
+      '<div class="fld"><span>Customer</span><b>' + esc(r.meta.name || '\u2014') + '</b></div>' +
+      '<div class="fld"><span>Quote no.</span><b>' + esc(r.meta.quoteNo || '\u2014') + '</b></div>' +
+      '<div class="fld"><span>Date</span><b>' + esc(r.meta.date || '\u2014') + '</b></div>' +
+      '<div class="fld"><span>Pages read</span><b>' + r.pages + '</b></div>' +
+    '</div>' +
+    (r.lines.length ? '<div class="tablewrap" style="max-height:38vh;overflow:auto"><table class="lines" style="min-width:720px">' +
+      '<thead><tr><th></th><th>Code</th><th>Description</th><th class="r">Qty</th><th class="r">Excl</th><th class="r">Disc</th><th class="r">Net</th><th class="r">Total</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>'
+      : '<div class="empty">No item lines were found in that PDF.</div>') +
+    '<div class="help" ' + (gap !== null && Math.abs(gap) > 0.05 ? 'style="background:#fdeceb;border-color:#f0b4b0;color:#7a1c16"' : '') + '>' +
+      '<b>Check against the PDF</b><br>Lines read add up to <b>' + fmt(r.computed) + '</b>.' +
+      (r.stated.sub != null ? ' The PDF\u2019s own SUB TOTAL is <b>' + fmt(r.stated.sub) + '</b>.' : ' No SUB TOTAL was found in the PDF.') +
+      (gap !== null ? (Math.abs(gap) <= 0.05 ? ' They match.' : ' <b>They differ by ' + fmt(gap) + '</b> \u2014 check the lines above before importing.') : '') +
+    '</div>' +
+    '<div class="grid g2">' +
+      '<label class="fld"><span>Bring it in as</span>' + SEL({ s:'modal', f:'mode', rr:1 }, [['quote','A new quote in the project that is open'],['project','A brand new project']], m.mode) + '</label>' +
+      F('Name this quote', { s:'modal', f:'title' }, m.title, { ph:'e.g. Asili tiles' }) +
+    '</div>' +
+    (m.mode === 'project' ? '<p class="hint">The customer details from the PDF will be used for the new project.</p>' : '');
+  return modalShell('Import a Sage quotation', esc(m.file || ''), body,
+    '<button class="btn" data-action="modal-close">Cancel</button>' +
+    (r.lines.length ? '<button class="btn primary" data-action="pdf-ok">Import ' + r.lines.length + ' line' + (r.lines.length === 1 ? '' : 's') + '</button>' : ''), true);
 }
 function settingsModalHTML(){
   const s = settings;
@@ -1512,6 +1551,292 @@ create policy ss_products_all on ss_products for all to anon using (true) with c
 create policy ss_projects_all on ss_projects for all to anon using (true) with check (true);`;
 
 /* =====================================================================
+   Import a Sage-generated quotation PDF and turn it back into a quote.
+
+   Sage writes plain text with exact coordinates, so the page can be read
+   without a PDF library: inflate the content streams with the browser's
+   own DecompressionStream, walk the text operators, then rebuild the
+   table from the positions.
+   ===================================================================== */
+
+/* ---------- 1. inflate ---------- */
+const canReadPdf = () => typeof DecompressionStream === 'function';
+/* Read the decompression stream directly. Blob()/Response() are not usable
+   here because the tool is normally opened straight from a file, not a server. */
+async function inflateWith(bytes, format){
+  const ds = new DecompressionStream(format);
+  const w = ds.writable.getWriter();
+  w.write(bytes).then(() => w.close()).catch(() => {});
+  const reader = ds.readable.getReader();
+  const chunks = []; let len = 0;
+  for(;;){
+    const r = await reader.read();
+    if(r.done) break;
+    chunks.push(r.value); len += r.value.length;
+  }
+  const out = new Uint8Array(len); let o = 0;
+  chunks.forEach(c => { out.set(c, o); o += c.length; });
+  return out;
+}
+async function inflateBytes(raw){
+  /* PDF writers usually leave an end-of-line between the data and "endstream";
+     DecompressionStream treats those spare bytes as corruption, so trim them. */
+  let end = raw.length;
+  while(end > 0 && (raw[end - 1] === 10 || raw[end - 1] === 13 || raw[end - 1] === 32)) end--;
+  const bytes = end === raw.length ? raw : raw.subarray(0, end);
+  const zlib = bytes.length > 1 && (bytes[0] & 0x0f) === 8;
+  try{ return await inflateWith(bytes, zlib ? 'deflate' : 'deflate-raw'); }
+  catch(e){ return await inflateWith(bytes, zlib ? 'deflate-raw' : 'deflate'); }
+}
+function bytesToLatin1(u8){
+  let out = '';
+  for(let i = 0; i < u8.length; i += 0x8000) out += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return out;
+}
+
+/* ---------- 2. content streams ---------- */
+async function pdfContentStreams(buf){
+  const bytes = new Uint8Array(buf);
+  const s = bytesToLatin1(bytes);
+  const out = [];
+  let i = 0;
+  while((i = s.indexOf('stream', i)) >= 0){
+    /* skip the 'stream' inside a preceding 'endstream' */
+    if(s.slice(i - 3, i) === 'end'){ i += 6; continue; }
+    const dict = s.slice(Math.max(0, i - 3000), i);
+    let j = i + 6;
+    if(s[j] === '\r') j++;
+    if(s[j] === '\n') j++;
+    const e = s.indexOf('endstream', j);
+    if(e < 0){ i = j; continue; }
+    i = e + 9;
+    if(e - j > 8e6) continue;                                  /* far too big to be a page of text */
+    if(/\/Subtype\s*\/Image/.test(dict)) continue;             /* pictures, not text */
+    try{
+      const dec = await inflateBytes(bytes.subarray(j, e));
+      const txt = bytesToLatin1(dec);
+      if(txt.indexOf('BT') >= 0 && (txt.indexOf('Tj') >= 0 || txt.indexOf('TJ') >= 0)) out.push(txt);
+    }catch(err){ /* not a deflate stream, skip */ }
+  }
+  return out;
+}
+
+/* ---------- 3. text runs with coordinates ---------- */
+function pdfUnescape(s){
+  let out = '';
+  for(let i = 0; i < s.length; i++){
+    const c = s[i];
+    if(c === '\\' && i + 1 < s.length){
+      const n = s[i + 1];
+      if(n === '(' || n === ')' || n === '\\'){ out += n; i++; continue; }
+      if(n === 'n'){ out += '\n'; i++; continue; }
+      if(n === 'r'){ out += '\r'; i++; continue; }
+      if(n === 't'){ out += '\t'; i++; continue; }
+      if(n === 'b' || n === 'f'){ out += ' '; i++; continue; }
+      const oct = /^[0-7]{1,3}/.exec(s.slice(i + 1, i + 4));
+      if(oct){ out += String.fromCharCode(parseInt(oct[0], 8)); i += oct[0].length; continue; }
+      i++; continue;
+    }
+    out += c;
+  }
+  return out;
+}
+const PDF_TOK = /\(((?:[^()\\]|\\[\s\S])*)\)|\[((?:[^\[\]\\]|\\[\s\S])*)\]|(-?\d*\.?\d+)|(Tm|Td|TD|TL|T\*|Tj|TJ|'|")/g;
+function pdfTextRuns(content){
+  const items = [];
+  const blocks = content.split(/\bBT\b/).slice(1);
+  blocks.forEach(whole => {
+    const blk = whole.split(/\bET\b/)[0];
+    let lx = 0, ly = 0, tx = 0, ty = 0, lead = 0, nums = [], pend = null, m;
+    PDF_TOK.lastIndex = 0;
+    while((m = PDF_TOK.exec(blk))){
+      const lit = m[1], arr = m[2], num = m[3], op = m[4];
+      if(num !== undefined){ nums.push(parseFloat(num)); continue; }
+      if(lit !== undefined){ pend = pdfUnescape(lit); continue; }
+      if(arr !== undefined){
+        let t = '';
+        const re = /\(((?:[^()\\]|\\[\s\S])*)\)/g; let a;
+        while((a = re.exec(arr))) t += pdfUnescape(a[1]);
+        pend = t; continue;
+      }
+      if(op === 'Tm' && nums.length >= 6){ lx = nums[nums.length - 2]; ly = nums[nums.length - 1]; tx = lx; ty = ly; }
+      else if((op === 'Td' || op === 'TD') && nums.length >= 2){
+        lx += nums[nums.length - 2]; ly += nums[nums.length - 1]; tx = lx; ty = ly;
+        if(op === 'TD') lead = -nums[nums.length - 1];
+      }
+      else if(op === 'TL' && nums.length) lead = nums[nums.length - 1];
+      else if(op === 'T*'){ ly -= lead; tx = lx; ty = ly; }
+      else if(op === 'Tj' || op === 'TJ' || op === "'" || op === '"'){
+        if(op === "'" || op === '"'){ ly -= lead; tx = lx; ty = ly; }
+        if(pend && pend.trim()) items.push({ y:Math.round(ty * 10) / 10, x:Math.round(tx * 10) / 10, t:pend.trim() });
+        pend = null;
+      }
+      nums = [];
+    }
+  });
+  const seen = {}, out = [];
+  items.forEach(it => { const k = it.y + '|' + it.x + '|' + it.t; if(!seen[k]){ seen[k] = 1; out.push(it); } });
+  return out;
+}
+/* group runs that sit on the same printed line (Sage splits a row over ~3pt) */
+function pdfRows(runs, tol){
+  tol = tol || 4.2;
+  const sorted = runs.slice().sort((a, b) => b.y - a.y);
+  const rows = [];
+  sorted.forEach(r => {
+    const last = rows[rows.length - 1];
+    if(last && Math.abs(last.y - r.y) <= tol){ last.cells.push(r); last.y = (last.y * last.n + r.y) / (last.n + 1); last.n++; }
+    else rows.push({ y:r.y, n:1, cells:[r] });
+  });
+  rows.forEach(r => r.cells.sort((a, b) => a.x - b.x));
+  return rows;
+}
+async function pdfPages(buf){
+  const streams = await pdfContentStreams(buf);
+  return streams.map(c => pdfRows(pdfTextRuns(c))).filter(p => p.length);
+}
+
+/* ---------- 4. read a Sage quotation ---------- */
+const SAGE_NUM = /^-?[\d,]+(?:\.\d+)?$/;
+const isNum = t => SAGE_NUM.test(String(t).replace(/\s/g, '')) && /\d/.test(t);
+const cellNum = t => num(String(t).replace(/,/g, ''));
+function rowText(row, from, to){
+  return row.cells.filter(c => c.x >= (from == null ? -1e9 : from) && c.x < (to == null ? 1e9 : to)).map(c => c.t).join(' ').trim();
+}
+function findRow(rows, re, xMax){
+  return rows.find(r => r.cells.some(c => re.test(c.t) && (xMax == null || c.x <= xMax)));
+}
+function labelValue(rows, label){
+  const re = new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
+  const row = rows.find(r => r.cells.some(c => re.test(c.t)));
+  if(!row) return '';
+  const lab = row.cells.find(c => re.test(c.t));
+  const after = row.cells.filter(c => c.x > lab.x + 5).map(c => c.t).join(' ').trim();
+  return after;
+}
+/* item rows carry at least two figures in the numeric half of the page */
+const NUMCOL_X = 270;
+function numericCells(row){ return row.cells.filter(c => c.x >= NUMCOL_X && isNum(c.t)); }
+
+function parseSageQuote(pages){
+  const meta = { code:'', name:'', location:'', phone:'', pin:'', date:'', rep:'', quoteNo:'' };
+  const lines = [];
+  let stated = { sub:null, vat:null, total:null };
+  let last = null;
+
+  pages.forEach((rows, pi) => {
+    /* --- meta, from the first page --- */
+    if(pi === 0){
+      meta.date = (labelValue(rows, 'DATE') || '').trim();
+      meta.rep = (labelValue(rows, 'REP') || '').trim();
+      meta.quoteNo = (labelValue(rows, 'QUOTE NO.') || '').trim();
+      const web = findRow(rows, /^Website:/i);
+      const pin = findRow(rows, /^Customer PIN:?/i);
+      if(web && pin){
+        const block = rows.filter(r => r.y < web.y - 1 && r.y > pin.y + 1)
+          .map(r => rowText(r, null, 260)).filter(Boolean);
+        meta.code = block[0] || ''; meta.name = block[1] || '';
+        meta.location = block[2] || ''; meta.phone = block[3] || '';
+      }
+      if(pin){
+        const t = rowText(pin, null, 300).replace(/^Customer PIN:?\s*/i, '').trim();
+        meta.pin = t;
+      }
+    }
+    /* --- the item table --- */
+    const head = findRow(rows, /^CODE$/i, 120);
+    const foot = findRow(rows, /^(Prepared BY|SUB TOTAL)$/i);
+    const top = head ? head.y : 1e9;
+    const bottom = foot ? foot.y : -1e9;
+    rows.forEach(r => {
+      if(r.y >= top - 2 || r.y <= bottom + 2) return;
+      const nums = numericCells(r);
+      const left = r.cells.filter(c => c.x < NUMCOL_X);
+      if(nums.length >= 2 && left.length){
+        const code = left[0].x < 70 ? left[0].t : '';
+        const desc = left.filter(c => c.x >= (code ? 60 : 0)).map(c => c.t).join(' ').trim();
+        const v = nums.map(c => cellNum(c.t));
+        let qty = v[0], excl = v[1], disc = 0, net, total;
+        if(v.length >= 5){ disc = v[2]; net = v[3]; total = v[4]; }
+        else if(v.length === 4){ net = v[2]; total = v[3]; }
+        else if(v.length === 3){ net = v[1]; total = v[2]; excl = v[1]; }
+        else { net = v[1]; total = r2(v[0] * v[1]); }
+        /* trust the printed total: back out the discount if it does not tie up */
+        if(qty && net && Math.abs(r2(qty * net) - total) > 0.05 && Math.abs(total / qty - net) > 0.005){
+          net = r2(total / qty);
+        }
+        if(excl && net && !disc && Math.abs(excl - net) > 0.005) disc = r2((1 - net / excl) * 100);
+        last = { code, desc, qty, excl:excl || net, disc, net, total, detail:[] };
+        lines.push(last);
+      } else if(last && left.length && !nums.length){
+        const t = rowText(r, null, NUMCOL_X);
+        if(t && !/^Page\b/i.test(t)) last.detail.push(t);
+      }
+    });
+    /* --- the figures Sage printed, for checking --- */
+    const grab = (label) => {
+      const row = findRow(rows, new RegExp('^' + label + '$', 'i'));
+      if(!row) return null;
+      const n = row.cells.filter(c => isNum(c.t) && c.x > 300);
+      return n.length ? cellNum(n[n.length - 1].t) : null;
+    };
+    const s = grab('SUB TOTAL'), v = grab('VAT'), t = grab('TOTAL INC');
+    if(s != null) stated.sub = s;
+    if(v != null) stated.vat = v;
+    if(t != null) stated.total = t;
+  });
+
+  const computed = r2(lines.reduce((a, l) => a + r2(num(l.qty) * num(l.net)), 0));
+  return { meta, lines, stated, computed, pages:pages.length };
+}
+
+/* ---------- 5. the button ---------- */
+function pickBinaryFile(accept, onBuffer){
+  const inp = document.createElement('input');
+  inp.type = 'file'; if(accept) inp.accept = accept; inp.style.display = 'none';
+  inp.addEventListener('change', () => {
+    const f = inp.files && inp.files[0];
+    if(f){ const rd = new FileReader(); rd.onload = () => onBuffer(rd.result, f.name); rd.readAsArrayBuffer(f); }
+    inp.remove();
+  });
+  document.body.appendChild(inp); inp.click();
+}
+function importSagePdf(){
+  if(!canReadPdf()){ toast('This browser cannot unzip PDF text \u2014 try Chrome, Edge or a recent Safari'); return; }
+  pickBinaryFile('.pdf,application/pdf', async (buf, name) => {
+    ui.modal = { type:'pdf', stage:'reading', file:name }; renderModal();
+    try{
+      const pages = await pdfPages(buf);
+      if(!pages.length) throw new Error('No readable text was found. If this PDF is a scan or a photograph there is no text in it to read.');
+      const res = parseSageQuote(pages);
+      if(!res.lines.length) throw new Error('Text was read, but no quotation table was found. Is this a Sage quotation?');
+      ui.modal = { type:'pdf', stage:'ready', file:name, res:res, mode:'quote',
+        title: res.meta.quoteNo ? ('Quote ' + res.meta.quoteNo) : 'Imported quote' };
+    }catch(e){
+      ui.modal = { type:'pdf', stage:'failed', file:name, error:(e && e.message) ? e.message : String(e) };
+    }
+    renderModal();
+  });
+}
+
+/* ---------- 6. turn the reading into a quote ---------- */
+function sageDateToISO(s){
+  const m = /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/.exec(String(s || ''));
+  return m ? m[3] + '-' + pad2(+m[2]) + '-' + pad2(+m[1]) : todayISO();
+}
+function sageToQuote(res, title){
+  const q = newQuote(project, title || ('Imported ' + (res.meta.quoteNo || '')));
+  q.no = res.meta.quoteNo || q.no;
+  q.date = sageDateToISO(res.meta.date);
+  q.showDisc = res.lines.some(l => num(l.disc) > 0);
+  q.lines = res.lines.map(l => newLine({
+    code:l.code, desc:l.desc, qty:num(l.qty), excl:num(l.excl), disc:r2(num(l.disc)),
+    detail:l.detail.join('\n'), detailOpen:l.detail.length > 0
+  }));
+  return q;
+}
+
+/* =====================================================================
    Events + actions + startup
    ===================================================================== */
 function touch(structural){ histRecord(structural); queueSave(); refreshComputed(); renderTopbar(); if(ui.preview) schedulePreview(); }
@@ -1812,6 +2137,27 @@ function act(a, el, ev){
       if(confirm('Remove this project from the shared cloud list? Local copies on each computer stay.')) cloudDeleteProject(d.id);
       break;
     case 'lib-sync': syncLibrary().then(ok => { if(ok) render(); }); break;
+    case 'import-pdf': importSagePdf(); break;
+    case 'pdf-ok': {
+      const m = ui.modal; if(!m || !m.res) break;
+      const r = m.res;
+      if(m.mode === 'project'){
+        if(project) saveNow();
+        const p = blankProject();
+        p.client = { code:r.meta.code || '', name:r.meta.name || '', location:r.meta.location || '', phone:r.meta.phone || '', pin:r.meta.pin || '' };
+        p.projectName = r.meta.name || ''; p.rep = r.meta.rep || settings.rep;
+        project = p; project.quotes = []; histInit();
+      }
+      const q = sageToQuote(r, m.title);
+      project.quotes.push(q); project.activeQuote = q.id;
+      if(!String(project.rep || '').trim() && r.meta.rep) project.rep = r.meta.rep;
+      if(m.mode !== 'project' && !String(project.client.name || '').trim()){
+        project.client = { code:r.meta.code || '', name:r.meta.name || '', location:r.meta.location || '', phone:r.meta.phone || '', pin:r.meta.pin || '' };
+      }
+      touch(true); ui.modal = null; ui.tab = 'quotes'; render();
+      toast('Imported ' + q.lines.length + ' lines from the PDF');
+      break;
+    }
     case 'lib-bulk': ui.modal = { type:'bulk', cat:ui.libCat || '', text:'' }; renderModal(); break;
     case 'bulk-ok': {
       const rows = parseProductRows(ui.modal.text, ui.modal.cat);
