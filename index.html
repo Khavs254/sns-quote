@@ -1152,36 +1152,49 @@ function pdfModalHTML(m){
     '<div class="help" style="background:#fdeceb;border-color:#f0b4b0;color:#7a1c16">' + esc(m.error) + '</div>' +
     '<p class="hint">This reads the text Sage puts in the file. A scanned or photographed quote has no text in it and cannot be read.</p>',
     '<button class="btn primary" data-action="modal-close">Close</button>');
-  const r = m.res;
-  const gap = r.stated.sub == null ? null : r2(r.computed - r.stated.sub);
-  const rows = r.lines.map((l, i) => '<tr><td class="idx">' + (i + 1) + '</td><td><b>' + esc(l.code || '\u2014') + '</b></td><td>' + esc(l.desc) +
-      (l.detail.length ? '<br><small style="color:#1f3fbf">' + l.detail.map(esc).join('<br>') + '</small>' : '') + '</td>' +
-      '<td class="r">' + fmt(l.qty, 2) + '</td><td class="r">' + fmt(l.excl) + '</td><td class="r">' + (num(l.disc) ? fmt(l.disc, 2) : '') + '</td>' +
-      '<td class="r">' + fmt(l.net) + '</td><td class="r"><b>' + fmt(r2(num(l.qty) * num(l.net))) + '</b></td></tr>').join('');
-  const body =
-    '<div class="grid g4" style="margin-bottom:10px">' +
-      '<div class="fld"><span>Customer</span><b>' + esc(r.meta.name || '\u2014') + '</b></div>' +
-      '<div class="fld"><span>Quote no.</span><b>' + esc(r.meta.quoteNo || '\u2014') + '</b></div>' +
-      '<div class="fld"><span>Date</span><b>' + esc(r.meta.date || '\u2014') + '</b></div>' +
-      '<div class="fld"><span>Pages read</span><b>' + r.pages + '</b></div>' +
-    '</div>' +
-    (r.lines.length ? '<div class="tablewrap" style="max-height:38vh;overflow:auto"><table class="lines" style="min-width:720px">' +
+  const qs = m.quotes || [];
+  const many = qs.length > 1;
+  const block = (r, k) => {
+    const gap = r.stated.sub == null ? null : r2(r.computed - r.stated.sub);
+    const bad = gap !== null && Math.abs(gap) > 0.05;
+    const rows = r.lines.map((l, i) => '<tr><td class="idx">' + (i + 1) + '</td><td><b>' + esc(l.code || '\u2014') + '</b></td><td>' + esc(l.desc) +
+        (l.detail.length ? '<br><small style="color:#1f3fbf">' + l.detail.map(esc).join('<br>') + '</small>' : '') + '</td>' +
+        '<td class="r">' + fmt(l.qty, 2) + '</td><td class="r">' + fmt(l.excl) + '</td><td class="r">' + (num(l.disc) ? fmt(l.disc, 2) : '') + '</td>' +
+        '<td class="r">' + fmt(l.net) + '</td><td class="r"><b>' + fmt(r2(num(l.qty) * num(l.net))) + '</b></td></tr>').join('');
+    return '<div style="border:1px solid var(--line-2);border-radius:8px;padding:12px 14px;margin-bottom:12px">' +
+      (many ? '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px">' +
+        '<b style="font-size:15px">Quote ' + esc(r.quoteNo || (k + 1)) + '</b>' +
+        '<span class="rq-sub" style="color:var(--muted);font-size:12.5px">' + r.lines.length + ' lines \u00b7 ' + esc(r.meta.date || '') + ' \u00b7 ' + esc(r.meta.rep || '') + '</span></div>' : '') +
+      '<div class="tablewrap" style="max-height:' + (many ? '26vh' : '36vh') + ';overflow:auto"><table class="lines" style="min-width:700px">' +
       '<thead><tr><th></th><th>Code</th><th>Description</th><th class="r">Qty</th><th class="r">Excl</th><th class="r">Disc</th><th class="r">Net</th><th class="r">Total</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table></div>'
-      : '<div class="empty">No item lines were found in that PDF.</div>') +
-    '<div class="help" ' + (gap !== null && Math.abs(gap) > 0.05 ? 'style="background:#fdeceb;border-color:#f0b4b0;color:#7a1c16"' : '') + '>' +
-      '<b>Check against the PDF</b><br>Lines read add up to <b>' + fmt(r.computed) + '</b>.' +
-      (r.stated.sub != null ? ' The PDF\u2019s own SUB TOTAL is <b>' + fmt(r.stated.sub) + '</b>.' : ' No SUB TOTAL was found in the PDF.') +
-      (gap !== null ? (Math.abs(gap) <= 0.05 ? ' They match.' : ' <b>They differ by ' + fmt(gap) + '</b> \u2014 check the lines above before importing.') : '') +
+      '<tbody>' + rows + '</tbody></table></div>' +
+      '<div class="help" ' + (bad ? 'style="background:#fdeceb;border-color:#f0b4b0;color:#7a1c16;margin:10px 0 0"' : 'style="margin:10px 0 0"') + '>' +
+        'Lines read add up to <b>' + fmt(r.computed) + '</b>.' +
+        (r.stated.sub != null ? ' The PDF\u2019s own SUB TOTAL is <b>' + fmt(r.stated.sub) + '</b>.' : ' No SUB TOTAL was found.') +
+        (gap !== null ? (bad ? ' <b>They differ by ' + fmt(gap) + '</b> \u2014 check the lines before importing.' : ' They match.') : '') +
+      '</div>' +
+      '<div style="margin-top:10px">' + F('Name this quote', { s:'modal', f:'title' + k }, (m.titles || [])[k] || '', { ph:'e.g. Frametech LGS' }) + '</div>' +
+    '</div>';
+  };
+  const totalAll = r2(qs.reduce((a, r) => a + r.computed, 0));
+  const meta = qs[0] ? qs[0].meta : {};
+  const body =
+    '<div class="grid g4" style="margin-bottom:12px">' +
+      '<div class="fld"><span>Customer</span><b>' + esc(meta.name || '\u2014') + '</b></div>' +
+      '<div class="fld"><span>Quotations found</span><b>' + qs.length + '</b></div>' +
+      '<div class="fld"><span>Date</span><b>' + esc(meta.date || '\u2014') + '</b></div>' +
+      '<div class="fld"><span>Combined value</span><b>' + fmt(totalAll) + '</b></div>' +
     '</div>' +
+    (many ? '<div class="help" style="margin-bottom:12px">This PDF holds <b>' + qs.length + ' separate quotations</b>. They come in as ' + qs.length + ' quotes, each keeping its own number and total.</div>' : '') +
+    qs.map(block).join('') +
     '<div class="grid g2">' +
-      '<label class="fld"><span>Bring it in as</span>' + SEL({ s:'modal', f:'mode', rr:1 }, [['quote','A new quote in the project that is open'],['project','A brand new project']], m.mode) + '</label>' +
-      F('Name this quote', { s:'modal', f:'title' }, m.title, { ph:'e.g. Asili tiles' }) +
+      '<label class="fld"><span>Bring it in as</span>' + SEL({ s:'modal', f:'mode', rr:1 }, [['quote','New quote' + (many ? 's' : '') + ' in the project that is open'],['project','A brand new project']], m.mode) + '</label>' +
+      CHK('Also add ' + (many ? 'each quote' : 'the quote') + ' to the grand summary', { s:'modal', f:'toGrand' }, m.toGrand) +
     '</div>' +
     (m.mode === 'project' ? '<p class="hint">The customer details from the PDF will be used for the new project.</p>' : '');
   return modalShell('Import a Sage quotation', esc(m.file || ''), body,
     '<button class="btn" data-action="modal-close">Cancel</button>' +
-    (r.lines.length ? '<button class="btn primary" data-action="pdf-ok">Import ' + r.lines.length + ' line' + (r.lines.length === 1 ? '' : 's') + '</button>' : ''), true);
+    '<button class="btn primary" data-action="pdf-ok">Import ' + qs.length + ' quote' + (many ? 's' : '') + '</button>', true);
 }
 function settingsModalHTML(){
   const s = settings;
@@ -1790,6 +1803,22 @@ function parseSageQuote(pages){
   return { meta, lines, stated, computed, pages:pages.length };
 }
 
+/* One PDF can hold several quotations. Split the pages by QUOTE NO. so each
+   one comes in as its own quote with its own totals. */
+function parseSagePdf(pages){
+  const order = [], byNo = {};
+  pages.forEach(rows => {
+    const no = String(labelValue(rows, 'QUOTE NO.') || '').trim() || '__single';
+    if(!byNo[no]){ byNo[no] = []; order.push(no); }
+    byNo[no].push(rows);
+  });
+  return order.map(no => {
+    const res = parseSageQuote(byNo[no]);
+    res.quoteNo = res.meta.quoteNo || (no === '__single' ? '' : no);
+    return res;
+  }).filter(r => r.lines.length);
+}
+
 /* ---------- 5. the button ---------- */
 function pickBinaryFile(accept, onBuffer){
   const inp = document.createElement('input');
@@ -1808,10 +1837,10 @@ function importSagePdf(){
     try{
       const pages = await pdfPages(buf);
       if(!pages.length) throw new Error('No readable text was found. If this PDF is a scan or a photograph there is no text in it to read.');
-      const res = parseSageQuote(pages);
-      if(!res.lines.length) throw new Error('Text was read, but no quotation table was found. Is this a Sage quotation?');
-      ui.modal = { type:'pdf', stage:'ready', file:name, res:res, mode:'quote',
-        title: res.meta.quoteNo ? ('Quote ' + res.meta.quoteNo) : 'Imported quote' };
+      const quotes = parseSagePdf(pages);
+      if(!quotes.length) throw new Error('Text was read, but no quotation table was found. Is this a Sage quotation?');
+      ui.modal = { type:'pdf', stage:'ready', file:name, quotes:quotes, mode:'quote', toGrand:true,
+        titles: quotes.map(q => q.quoteNo ? ('Quote ' + q.quoteNo) : 'Imported quote') };
     }catch(e){
       ui.modal = { type:'pdf', stage:'failed', file:name, error:(e && e.message) ? e.message : String(e) };
     }
@@ -1860,7 +1889,11 @@ function resolveTarget(d){
 function applyField(el){
   const d = el.dataset;
   if(!d.s) return;
-  if(d.s === 'modal'){ modalSet(d.f, el); return; }
+  if(d.s === 'modal'){
+    const tm = /^title(\d+)$/.exec(d.f || '');
+    if(tm && ui.modal && ui.modal.titles){ ui.modal.titles[+tm[1]] = el.value; return; }
+    modalSet(d.f, el); return;
+  }
   if(d.s === 'heavyrate'){
     const v = String(el.value).trim();
     if(v === '') delete heavyRates[d.k]; else heavyRates[d.k] = num(v);
@@ -2139,23 +2172,32 @@ function act(a, el, ev){
     case 'lib-sync': syncLibrary().then(ok => { if(ok) render(); }); break;
     case 'import-pdf': importSagePdf(); break;
     case 'pdf-ok': {
-      const m = ui.modal; if(!m || !m.res) break;
-      const r = m.res;
+      const m = ui.modal; if(!m || !m.quotes || !m.quotes.length) break;
+      const first = m.quotes[0];
+      const cust = r => ({ code:r.meta.code || '', name:r.meta.name || '', location:r.meta.location || '', phone:r.meta.phone || '', pin:r.meta.pin || '' });
       if(m.mode === 'project'){
         if(project) saveNow();
         const p = blankProject();
-        p.client = { code:r.meta.code || '', name:r.meta.name || '', location:r.meta.location || '', phone:r.meta.phone || '', pin:r.meta.pin || '' };
-        p.projectName = r.meta.name || ''; p.rep = r.meta.rep || settings.rep;
+        p.client = cust(first);
+        p.projectName = first.meta.name || ''; p.rep = first.meta.rep || settings.rep;
+        p.grand.items = p.grand.items.filter(it => it.group === 'prelim');   /* keep the standard exemptions only */
         project = p; project.quotes = []; histInit();
+      } else if(!String(project.client.name || '').trim()){
+        project.client = cust(first);
       }
-      const q = sageToQuote(r, m.title);
-      project.quotes.push(q); project.activeQuote = q.id;
-      if(!String(project.rep || '').trim() && r.meta.rep) project.rep = r.meta.rep;
-      if(m.mode !== 'project' && !String(project.client.name || '').trim()){
-        project.client = { code:r.meta.code || '', name:r.meta.name || '', location:r.meta.location || '', phone:r.meta.phone || '', pin:r.meta.pin || '' };
-      }
-      touch(true); ui.modal = null; ui.tab = 'quotes'; render();
-      toast('Imported ' + q.lines.length + ' lines from the PDF');
+      if(!String(project.rep || '').trim() && first.meta.rep) project.rep = first.meta.rep;
+      let lines = 0;
+      m.quotes.forEach((r, k) => {
+        const q = sageToQuote(r, (m.titles || [])[k]);
+        project.quotes.push(q); project.activeQuote = q.id; lines += q.lines.length;
+        if(m.toGrand){
+          const gi = newGItem('main', q.title || ('Quote ' + (r.quoteNo || '')), { kind:'quote', quoteId:q.id });
+          const prelimAt = project.grand.items.findIndex(it => it.group === 'prelim');
+          if(prelimAt >= 0) project.grand.items.splice(prelimAt, 0, gi); else project.grand.items.push(gi);
+        }
+      });
+      touch(true); ui.modal = null; ui.tab = m.quotes.length > 1 && m.toGrand ? 'grand' : 'quotes'; render();
+      toast('Imported ' + m.quotes.length + ' quote' + (m.quotes.length === 1 ? '' : 's') + ', ' + lines + ' lines');
       break;
     }
     case 'lib-bulk': ui.modal = { type:'bulk', cat:ui.libCat || '', text:'' }; renderModal(); break;
