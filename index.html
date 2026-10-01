@@ -1849,7 +1849,9 @@ function pdfTextRuns(content, fonts){
         while((a = re.exec(arr))) t += (a[1] !== undefined ? pdfUnescape(a[1]) : unhex(a[2]));
         pend = t; continue;
       }
-      if(op === 'BT' || op === 'ET'){ nums = []; continue; }
+      /* BT starts a fresh text object: the matrix goes back to the origin */
+      if(op === 'BT'){ lx = 0; ly = 0; tx = 0; ty = 0; nums = []; continue; }
+      if(op === 'ET'){ nums = []; continue; }
       if(op === 'Tm' && nums.length >= 6){ lx = nums[nums.length - 2]; ly = nums[nums.length - 1]; tx = lx; ty = ly; }
       else if((op === 'Td' || op === 'TD') && nums.length >= 2){
         lx += nums[nums.length - 2]; ly += nums[nums.length - 1]; tx = lx; ty = ly;
@@ -1913,16 +1915,37 @@ function pdfRows(runs, tol){
 async function pdfPagesByTree(bytes, fonts){
   const s = bytesToLatin1(bytes);
   const objs = await pdfObjects(bytes, s);
-  const out = [];
-  const nums = Object.keys(objs).map(Number).sort((a, b) => a - b);
-  nums.forEach(n => {
-    const d = objs[n].dict;
-    if(!/\/Type\s*\/Page[^s]/.test(d) && !/\/Type\s*\/Page\s*>/.test(d) && !/\/Type\s*\/Page\s*\//.test(d)) return;
+  const isPage = d => /\/Type\s*\/Page(?![s])/.test(d);
+  const contentsOf = d => {
     const cm = /\/Contents\s*(\d+)\s+\d+\s+R|\/Contents\s*\[([^\]]*)\]/.exec(d);
-    if(!cm) return;
-    const refs = cm[1] ? [+cm[1]] : (cm[2].match(/(\d+)\s+\d+\s+R/g) || []).map(r => parseInt(r, 10));
-    out.push(refs);
-  });
+    if(!cm) return null;
+    return cm[1] ? [+cm[1]] : (cm[2].match(/(\d+)\s+\d+\s+R/g) || []).map(r => parseInt(r, 10));
+  };
+  /* walk the page tree so the pages come out in reading order, not object order */
+  const ordered = [];
+  const kidsOf = n => {
+    const d = objs[n] && objs[n].dict;
+    if(!d) return null;
+    const km = /\/Kids\s*\[([\s\S]*?)\]/.exec(d);
+    return km ? (km[1].match(/(\d+)\s+\d+\s+R/g) || []).map(r => parseInt(r, 10)) : null;
+  };
+  const seen = {};
+  const walk = n => {
+    if(seen[n] || !objs[n]) return;
+    seen[n] = 1;
+    const d = objs[n].dict;
+    const kids = kidsOf(n);
+    if(kids && kids.length){ kids.forEach(walk); return; }
+    if(isPage(d)) ordered.push(n);
+  };
+  const allNums = Object.keys(objs).map(Number).sort((a, b) => a - b);
+  const kidSet = {};
+  allNums.forEach(n => { const k = kidsOf(n); if(k) k.forEach(x => { kidSet[x] = 1; }); });
+  allNums.forEach(n => { const d = objs[n].dict;
+    if(/\/Type\s*\/Pages/.test(d) && !kidSet[n]) walk(n); });
+  allNums.forEach(n => { if(!seen[n] && isPage(objs[n].dict)) ordered.push(n); });   /* anything the tree missed */
+  const out = [];
+  ordered.forEach(n => { const refs = contentsOf(objs[n].dict); if(refs) out.push(refs); });
   if(!out.length) return null;
   const pages = [];
   for(const refs of out){
@@ -2127,7 +2150,9 @@ function parseSagePdf(pages){
     const res = parseSageQuote(byNo[no]);
     res.quoteNo = res.meta.quoteNo || (no === '__single' ? '' : no);
     return res;
-  }).filter(r => r.lines.length);
+  }).filter(r => r.lines.length &&
+    /* a quotation carries a SUB TOTAL or a quote number; a stock report has neither */
+    (r.stated.sub !== null || r.quoteNo));
 }
 
 /* ---------- 5. the button ---------- */
