@@ -1645,13 +1645,10 @@ async function pdfContentStreams(buf){
     if(e < 0){ i = j; continue; }
     i = e + 9;
     if(e - j > 8e6) continue;                                  /* far too big to be a page of text */
-    /* No need to look at the object's dictionary: a picture is JPEG or similar
-       and simply fails to inflate, which the catch below handles. */
-    try{
-      const dec = await inflateBytes(bytes.subarray(j, e));
-      const txt = bytesToLatin1(dec);
-      if(txt.indexOf('BT') >= 0 && (txt.indexOf('Tj') >= 0 || txt.indexOf('TJ') >= 0)) out.push(txt);
-    }catch(err){ /* not a deflate stream, skip */ }
+    let txt = '';
+    try{ txt = bytesToLatin1(await inflateBytes(bytes.subarray(j, e))); }
+    catch(err){ const raw = s.slice(j, e); if(/\bBT\b/.test(raw)) txt = raw; }
+    if(txt && txt.indexOf('BT') >= 0 && (txt.indexOf('Tj') >= 0 || txt.indexOf('TJ') >= 0)) out.push(txt);
   }
   return out;
 }
@@ -1697,6 +1694,27 @@ function pdfParseCMap(txt){
   }
   return { map, width };
 }
+/* Not every stream is compressed — some writers store the font tables as plain
+   text — so take the raw bytes when inflating is not right or does not work. */
+async function pdfReadStream(bytes, s, obj){
+  if(!obj || obj.streamAt < 0) return '';
+  let j = obj.streamAt + 6;
+  if(s[j] === '\r') j++;
+  if(s[j] === '\n') j++;
+  const e = s.indexOf('endstream', j);
+  if(e < 0) return '';
+  const flate = /\/Filter[^>]*\/FlateDecode/.test(obj.dict);
+  if(flate){
+    try{ return bytesToLatin1(await inflateBytes(bytes.subarray(j, e))); }catch(err){}
+  }
+  const raw = s.slice(j, e);
+  if(/begincmap|beginbfchar|beginbfrange|\bBT\b/.test(raw)) return raw;
+  if(!flate){
+    try{ return bytesToLatin1(await inflateBytes(bytes.subarray(j, e))); }catch(err){}
+  }
+  return raw;
+}
+
 /* every object in the file, including the ones packed inside object streams */
 async function pdfObjects(bytes, s){
   const objs = {};
@@ -1714,13 +1732,8 @@ async function pdfObjects(bytes, s){
   for(const num of Object.keys(objs)){
     const o = objs[num];
     if(o.streamAt < 0 || !/\/Type\s*\/ObjStm/.test(o.dict)) continue;
-    let j = o.streamAt + 6;
-    if(s[j] === '\r') j++;
-    if(s[j] === '\n') j++;
-    const e = s.indexOf('endstream', j);
-    if(e < 0) continue;
-    let dec;
-    try{ dec = bytesToLatin1(await inflateBytes(bytes.subarray(j, e))); }catch(err){ continue; }
+    const dec = await pdfReadStream(bytes, s, o);
+    if(!dec) continue;
     const n = +(/\/N\s+(\d+)/.exec(o.dict) || [])[1] || 0;
     const first = +(/\/First\s+(\d+)/.exec(o.dict) || [])[1] || 0;
     const head = dec.slice(0, first).trim().split(/\s+/).map(Number);
@@ -1743,14 +1756,10 @@ async function pdfFontMaps(bytes){
     if(!/\/Type\s*\/Font/.test(d)) continue;
     const tu = /\/ToUnicode\s+(\d+)\s+\d+\s+R/.exec(d);
     if(!tu) continue;
-    const t = objs[+tu[1]];
-    if(!t || t.streamAt < 0) continue;
-    let j = t.streamAt + 6;
-    if(s[j] === '\r') j++;
-    if(s[j] === '\n') j++;
-    const e = s.indexOf('endstream', j);
-    if(e < 0) continue;
-    try{ cmapOf[num] = pdfParseCMap(bytesToLatin1(await inflateBytes(bytes.subarray(j, e)))); }catch(err){}
+    const txt = await pdfReadStream(bytes, s, objs[+tu[1]]);
+    if(!txt) continue;
+    const cm = pdfParseCMap(txt);
+    if(Object.keys(cm.map).length) cmapOf[num] = cm;
   }
   /* which resource name points at which font object */
   const byName = {};
@@ -1759,12 +1768,19 @@ async function pdfFontMaps(bytes){
     let f;
     const re = /\/Font\s*<<([\s\S]{0,4000}?)>>/g;
     while((f = re.exec(txt))){
-      const inner = f[1]; const rr = /\/([A-Za-z0-9#]+)\s+(\d+)\s+\d+\s+R/g; let a;
+      const inner = f[1]; const rr = /\/([A-Za-z0-9#_.+\-]+)\s+(\d+)\s+\d+\s+R/g; let a;
       while((a = rr.exec(inner))) if(cmapOf[+a[2]]) byName[a[1]] = cmapOf[+a[2]];
     }
   };
   scan(s);
   Object.keys(objs).forEach(k => scan(objs[k].dict));
+  /* one merged table, used when a font's own name cannot be tied to a table */
+  const all = { map:{}, width:2 };
+  Object.keys(cmapOf).forEach(k => {
+    all.width = cmapOf[k].width || all.width;
+    Object.keys(cmapOf[k].map).forEach(c => { if(all.map[c] === undefined) all.map[c] = cmapOf[k].map[c]; });
+  });
+  if(Object.keys(all.map).length) byName.__any = all;
   return byName;
 }
 
@@ -1788,14 +1804,18 @@ function pdfUnescape(s){
   }
   return out;
 }
-const PDF_TOK = /\(((?:[^()\\]|\\[\s\S])*)\)|\[((?:[^\[\]\\]|\\[\s\S])*)\]|<([0-9a-fA-F\s]+)>|\/([A-Za-z0-9#]+)\s+([\d.]+)\s+Tf|(-?\d*\.?\d+)|(Tm|Td|TD|TL|T\*|Tj|TJ|'|")/g;
+const PDF_TOK = /\(((?:[^()\\]|\\[\s\S])*)\)|\[((?:[^\[\]\\]|\\[\s\S])*)\]|<([0-9a-fA-F\s]+)>|\/([A-Za-z0-9#_.+\-]+)\s+([\d.]+)\s+Tf|(-?\d*\.?\d+)|(Tm|Td|TD|TL|T\*|Tj|TJ|BT|ET|'|")/g;
 function pdfTextRuns(content, fonts){
   fonts = fonts || {};
   const items = [];
-  const blocks = content.split(/\bBT\b/).slice(1);
+  /* One page's content can be split across several streams, so a stream may
+     begin in the middle of a text object. Read the whole thing in order
+     rather than carving it up at BT. */
+  const blocks = [content];
   blocks.forEach(whole => {
-    const blk = whole.split(/\bET\b/)[0];
-    let lx = 0, ly = 0, tx = 0, ty = 0, lead = 0, nums = [], pend = null, m, font = null, size = 9;
+    const blk = whole;
+    /* default to the merged table: some writers never emit a font operator */
+    let lx = 0, ly = 0, tx = 0, ty = 0, lead = 0, nums = [], pend = null, m, font = fonts.__any || null, size = 9;
     /* glyph codes -> letters, using the table of whichever font is selected */
     const unhex = h => {
       const clean = String(h).replace(/\s+/g, '');
@@ -1819,7 +1839,7 @@ function pdfTextRuns(content, fonts){
     PDF_TOK.lastIndex = 0;
     while((m = PDF_TOK.exec(blk))){
       const lit = m[1], arr = m[2], hex = m[3], fname = m[4], fsz = m[5], num = m[6], op = m[7];
-      if(fname !== undefined){ font = fonts[fname] || null; size = parseFloat(fsz) || size; continue; }
+      if(fname !== undefined){ font = fonts[fname] || fonts.__any || null; size = parseFloat(fsz) || size; continue; }
       if(num !== undefined){ nums.push(parseFloat(num)); continue; }
       if(lit !== undefined){ pend = pdfUnescape(lit); continue; }
       if(hex !== undefined){ pend = unhex(hex); continue; }
@@ -1829,6 +1849,7 @@ function pdfTextRuns(content, fonts){
         while((a = re.exec(arr))) t += (a[1] !== undefined ? pdfUnescape(a[1]) : unhex(a[2]));
         pend = t; continue;
       }
+      if(op === 'BT' || op === 'ET'){ nums = []; continue; }
       if(op === 'Tm' && nums.length >= 6){ lx = nums[nums.length - 2]; ly = nums[nums.length - 1]; tx = lx; ty = ly; }
       else if((op === 'Td' || op === 'TD') && nums.length >= 2){
         lx += nums[nums.length - 2]; ly += nums[nums.length - 1]; tx = lx; ty = ly;
@@ -1868,19 +1889,75 @@ function pdfRows(runs, tol){
       if(prev){
         const sz = prev.sz || 9;
         const endOfPrev = prev.x + prev.t.length * sz * 0.5;
-        if(c.x - endOfPrev < sz * 0.25){ prev.t += c.t; return; }
+        /* never run two finished money figures together */
+        const twoNumbers = /[\d)]\s*$/.test(prev.t) && /^[\d,]/.test(c.t) && /\.\d{2}$/.test(prev.t);
+        if(!twoNumbers && c.x - endOfPrev < sz * 0.25){ prev.t += c.t; return; }
       }
       out.push({ x:c.x, y:c.y, t:c.t, sz:c.sz });
     });
-    r.cells = out;
+    /* "10.0037,620.00" is two figures, not one */
+    const split = [];
+    out.forEach(c => {
+      const m = /^(\d[\d,]*\.\d{2})(\d[\d,]*\.\d{2})$/.exec(c.t);
+      if(m){
+        const sz = c.sz || 9;
+        split.push({ x:c.x, y:c.y, t:m[1], sz });
+        split.push({ x:c.x + m[1].length * sz * 0.5, y:c.y, t:m[2], sz });
+      } else split.push(c);
+    });
+    r.cells = split;
   });
   return rows;
 }
+/* Join each page's content streams the way the page tree says they belong. */
+async function pdfPagesByTree(bytes, fonts){
+  const s = bytesToLatin1(bytes);
+  const objs = await pdfObjects(bytes, s);
+  const out = [];
+  const nums = Object.keys(objs).map(Number).sort((a, b) => a - b);
+  nums.forEach(n => {
+    const d = objs[n].dict;
+    if(!/\/Type\s*\/Page[^s]/.test(d) && !/\/Type\s*\/Page\s*>/.test(d) && !/\/Type\s*\/Page\s*\//.test(d)) return;
+    const cm = /\/Contents\s*(\d+)\s+\d+\s+R|\/Contents\s*\[([^\]]*)\]/.exec(d);
+    if(!cm) return;
+    const refs = cm[1] ? [+cm[1]] : (cm[2].match(/(\d+)\s+\d+\s+R/g) || []).map(r => parseInt(r, 10));
+    out.push(refs);
+  });
+  if(!out.length) return null;
+  const pages = [];
+  for(const refs of out){
+    let txt = '';
+    for(const r of refs){
+      const o = objs[r];
+      if(!o) continue;
+      txt += (txt ? '\n' : '') + await pdfReadStream(bytes, s, o);
+    }
+    if(txt && txt.indexOf('BT') >= 0) pages.push(pdfRows(pdfOrient(pdfTextRuns(txt, fonts))));
+  }
+  return pages.filter(p => p.length);
+}
+/* A page drawn through a flipped transform comes out with the footer at the
+   top. Spot it from two landmarks and turn the page back over. */
+function pdfOrient(runs){
+  const at = re => { const r = runs.filter(x => re.test(x.t)); return r.length ? r[0].y : null; };
+  const terms = at(/^TERMS OF SALE/i), sub = at(/^SUB TOTAL/i), code = at(/^CODE/i);
+  let below = false;
+  if(terms != null && sub != null) below = terms > sub;          /* terms always sit under the totals */
+  else if(code != null && sub != null) below = sub > code;
+  else if(code != null && terms != null) below = terms > code;
+  if(!below) return runs;
+  return runs.map(r => ({ x:r.x, y:-r.y, t:r.t, sz:r.sz }));
+}
 async function pdfPages(buf){
-  const streams = await pdfContentStreams(buf);
+  const bytes = new Uint8Array(buf);
   let fonts = {};
-  try{ fonts = await pdfFontMaps(new Uint8Array(buf)); }catch(e){ fonts = {}; }
-  return streams.map(c => pdfRows(pdfTextRuns(c, fonts))).filter(p => p.length);
+  try{ fonts = await pdfFontMaps(bytes); }catch(e){ fonts = {}; }
+  try{
+    const byTree = await pdfPagesByTree(bytes, fonts);
+    if(byTree && byTree.length) return byTree;
+  }catch(e){ /* fall back to reading the streams as they come */ }
+  const streams = await pdfContentStreams(buf);
+  return streams.map(c => pdfRows(pdfOrient(pdfTextRuns(c, fonts)))).filter(p => p.length);
 }
 
 /* ---------- 4. read a Sage quotation ---------- */
@@ -1917,6 +1994,13 @@ function parseSageQuote(pages){
       meta.date = (labelValue(rows, 'DATE') || '').trim();
       meta.rep = (labelValue(rows, 'REP') || '').trim();
       meta.quoteNo = (labelValue(rows, 'QUOTE NO.') || '').trim();
+      if(!meta.quoteNo){
+        /* label and value can land on separate lines; find the number itself */
+        for(const r of rows){
+          const c = r.cells.find(x => /^SOQ\s*\d{4,}$/i.test(x.t.replace(/\s+/g, '')));
+          if(c){ meta.quoteNo = c.t.replace(/\s+/g, ''); break; }
+        }
+      }
       const web = findRow(rows, /^Website:/i);
       const pin = findRow(rows, /^Customer PIN:?/i);
       if(web && pin){
@@ -1946,8 +2030,11 @@ function parseSageQuote(pages){
         let c2 = code;
         if(code && !desc){
           /* code and description printed as one run: "FTS-MC00 Main Connectors" */
+          /* try "FC001Fasteners" before "FTS-MC00 Main Connectors" */
+          const nz = /^([A-Z][A-Z0-9][A-Z0-9./\-]*?)([A-Z][a-z].*)$/.exec(code);
           const sp = /^([A-Za-z0-9][\w./\-]*)\s+(.*\S)$/.exec(code);
-          if(sp && /[A-Za-z]{3,}/.test(sp[2])){ c2 = sp[1]; desc = sp[2]; }
+          if(nz){ c2 = nz[1]; desc = nz[2]; }
+          else if(sp && /[A-Za-z]{3,}/.test(sp[2])){ c2 = sp[1]; desc = sp[2]; }
         }
         const v = nums.map(c => cellNum(c.t));
         let qty = v[0], excl = v[1], disc = 0, net, total;
