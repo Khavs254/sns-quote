@@ -1161,6 +1161,7 @@ function pdfModalHTML(m){
         (l.detail.length ? '<br><small style="color:#1f3fbf">' + l.detail.map(esc).join('<br>') + '</small>' : '') + '</td>' +
         '<td class="r">' + fmt(l.qty, 2) + '</td><td class="r">' + fmt(l.excl) + '</td><td class="r">' + (num(l.disc) ? fmt(l.disc, 2) : '') + '</td>' +
         '<td class="r">' + fmt(l.net) + '</td><td class="r"><b>' + fmt(r2(num(l.qty) * num(l.net))) + '</b></td></tr>').join('');
+    const nFixed = r.lines.filter(l => l.fixed).length, nRep = r.lines.filter(l => l.repaired).length;
     return '<div style="border:1px solid var(--line-2);border-radius:8px;padding:12px 14px;margin-bottom:12px">' +
       (many ? '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px">' +
         '<b style="font-size:15px">Quote ' + esc(r.quoteNo || (k + 1)) + '</b>' +
@@ -1173,7 +1174,11 @@ function pdfModalHTML(m){
         (r.stated.sub != null ? ' The PDF\u2019s own SUB TOTAL is <b>' + fmt(r.stated.sub) + '</b>.' : ' No SUB TOTAL was found.') +
         (gap !== null ? (bad ? ' <b>They differ by ' + fmt(gap) + '</b> \u2014 check the lines before importing.' : ' They match.') : '') +
       '</div>' +
-      '<div style="margin-top:10px">' + F('Name this quote', { s:'modal', f:'title' + k }, (m.titles || [])[k] || '', { ph:'e.g. Frametech LGS' }) + '</div>' +
+      ((nRep || nFixed) ? '<p class="rq-sub" style="color:var(--muted);font-size:12px;margin:8px 0 0">' +
+        (nRep ? nRep + ' line' + (nRep === 1 ? '' : 's') + ' had the price columns printed apart from the codes and were put back together by matching quantity \u00d7 price to the printed total. ' : '') +
+        (nFixed ? nFixed + ' line' + (nFixed === 1 ? ' has' : 's have') + ' a net price that does not multiply out to the printed total, so the net was back-calculated from the total.' : '') + '</p>' : '') +
+      '<div class="grid g2" style="margin-top:10px">' + F('Name this quote', { s:'modal', f:'title' + k }, (m.titles || [])[k] || '', { ph:'e.g. Frametech LGS' }) +
+        (r.quoteNo ? '' : F('Quote no. (not readable in this PDF)', { s:'modal', f:'no' + k }, (m.nos || [])[k] || '', { ph:'e.g. SOQ102185' })) + '</div>' +
     '</div>';
   };
   const totalAll = r2(qs.reduce((a, r) => a + r.computed, 0));
@@ -1185,16 +1190,32 @@ function pdfModalHTML(m){
       '<div class="fld"><span>Date</span><b>' + esc(meta.date || '\u2014') + '</b></div>' +
       '<div class="fld"><span>Combined value</span><b>' + fmt(totalAll) + '</b></div>' +
     '</div>' +
+    (!meta.name ? '<div class="help" style="margin-bottom:12px"><b>The customer block in this PDF is a picture, not text</b>, so the name could not be read. Type it here and it will be used; the item lines were read normally.</div>' +
+      '<div class="grid g2" style="margin-bottom:12px">' +
+        F('Customer name', { s:'modal', f:'manualName' }, m.manualName || '', { ph:'e.g. ARNOLD OGOLLA' }) +
+        F('Customer code', { s:'modal', f:'manualCode' }, m.manualCode || '', { ph:'e.g. ARN0008' }) + '</div>' : '') +
     (many ? '<div class="help" style="margin-bottom:12px">This PDF holds <b>' + qs.length + ' separate quotations</b>. They come in as ' + qs.length + ' quotes, each keeping its own number and total.</div>' : '') +
     qs.map(block).join('') +
     '<div class="grid g2">' +
-      '<label class="fld"><span>Bring it in as</span>' + SEL({ s:'modal', f:'mode', rr:1 }, [['quote','New quote' + (many ? 's' : '') + ' in the project that is open'],['project','A brand new project']], m.mode) + '</label>' +
-      CHK('Also add ' + (many ? 'each quote' : 'the quote') + ' to the grand summary', { s:'modal', f:'toGrand' }, m.toGrand) +
+      '<label class="fld"><span>Bring it in as</span>' + SEL({ s:'modal', f:'mode', rr:1 },
+        [['quote','New quote' + (many ? 's' : '') + ' in the project that is open'],
+         ['merge','Extra lines added to a quote already here'],
+         ['project','A brand new project']], m.mode) + '</label>' +
+      (m.mode === 'merge'
+        ? '<label class="fld"><span>Add the lines to</span>' + SEL({ s:'modal', f:'mergeInto', rr:1 },
+            project.quotes.map(q => [q.id, (q.title || 'Quote') + '  \u2014  ' + fmt(quoteTotals(q).sub) + ' before this']), m.mergeInto) + '</label>'
+        : CHK('Also add ' + (many ? 'each quote' : 'the quote') + ' to the grand summary', { s:'modal', f:'toGrand' }, m.toGrand)) +
     '</div>' +
+    (m.mode === 'merge' ? '<div class="grid g2">' +
+      CHK('Where a code is already in that quote, add the quantities together instead of repeating the line', { s:'modal', f:'mergeQty' }, m.mergeQty, 'span2') + '</div>' +
+      '<p class="hint">The ' + qs.reduce((a, r) => a + r.lines.length, 0) + ' lines read here will be appended to the quote you pick, which then totals ' +
+        fmt(r2((quoteTotals(project.quotes.find(q => q.id === m.mergeInto) || project.quotes[0]) || { sub:0 }).sub + totalAll)) + ' before VAT.</p>' : '') +
     (m.mode === 'project' ? '<p class="hint">The customer details from the PDF will be used for the new project.</p>' : '');
   return modalShell('Import a Sage quotation', esc(m.file || ''), body,
     '<button class="btn" data-action="modal-close">Cancel</button>' +
-    '<button class="btn primary" data-action="pdf-ok">Import ' + qs.length + ' quote' + (many ? 's' : '') + '</button>', true);
+    '<button class="btn primary" data-action="pdf-ok">' + (m.mode === 'merge'
+      ? 'Add ' + qs.reduce((a, r) => a + r.lines.length, 0) + ' lines'
+      : 'Import ' + qs.length + ' quote' + (many ? 's' : '')) + '</button>', true);
 }
 function settingsModalHTML(){
   const s = settings;
@@ -1616,7 +1637,7 @@ async function pdfContentStreams(buf){
   while((i = s.indexOf('stream', i)) >= 0){
     /* skip the 'stream' inside a preceding 'endstream' */
     if(s.slice(i - 3, i) === 'end'){ i += 6; continue; }
-    const dict = s.slice(Math.max(0, i - 3000), i);
+
     let j = i + 6;
     if(s[j] === '\r') j++;
     if(s[j] === '\n') j++;
@@ -1624,7 +1645,8 @@ async function pdfContentStreams(buf){
     if(e < 0){ i = j; continue; }
     i = e + 9;
     if(e - j > 8e6) continue;                                  /* far too big to be a page of text */
-    if(/\/Subtype\s*\/Image/.test(dict)) continue;             /* pictures, not text */
+    /* No need to look at the object's dictionary: a picture is JPEG or similar
+       and simply fails to inflate, which the catch below handles. */
     try{
       const dec = await inflateBytes(bytes.subarray(j, e));
       const txt = bytesToLatin1(dec);
@@ -1632,6 +1654,118 @@ async function pdfContentStreams(buf){
     }catch(err){ /* not a deflate stream, skip */ }
   }
   return out;
+}
+
+/* ---------- 2b. subset fonts ----------
+   A quote re-printed through Word or a PDF driver stores text as glyph
+   numbers, not letters: <002600320027> is "COD". Each font carries a
+   ToUnicode table that translates them, so pull those out first. */
+function pdfParseCMap(txt){
+  const map = {}; let width = 2;
+  const hx = h => parseInt(h, 16);
+  let m;
+  const bc = /beginbfchar([\s\S]*?)endbfchar/g;
+  while((m = bc.exec(txt))){
+    const re = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g; let a;
+    while((a = re.exec(m[1]))){
+      width = Math.max(1, Math.round(a[1].length / 2));
+      let t = '';
+      for(let i = 0; i + 3 < a[2].length + 1; i += 4) t += String.fromCharCode(hx(a[2].substr(i, 4)));
+      map[hx(a[1])] = t;
+    }
+  }
+  const br = /beginbfrange([\s\S]*?)endbfrange/g;
+  while((m = br.exec(txt))){
+    const body = m[1];
+    const re = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*(<([0-9a-fA-F]+)>|\[([\s\S]*?)\])/g; let a;
+    while((a = re.exec(body))){
+      const lo = hx(a[1]), hi = hx(a[2]);
+      width = Math.max(1, Math.round(a[1].length / 2));
+      if(a[4] !== undefined){
+        const base = hx(a[4]);
+        for(let c = lo; c <= hi && c - lo < 65535; c++) map[c] = String.fromCharCode(base + (c - lo));
+      } else {
+        const items = a[5].match(/<([0-9a-fA-F]+)>/g) || [];
+        items.forEach((it, k) => {
+          const h = it.slice(1, -1);
+          let t = '';
+          for(let i = 0; i + 3 < h.length + 1; i += 4) t += String.fromCharCode(hx(h.substr(i, 4)));
+          map[lo + k] = t;
+        });
+      }
+    }
+  }
+  return { map, width };
+}
+/* every object in the file, including the ones packed inside object streams */
+async function pdfObjects(bytes, s){
+  const objs = {};
+  const re = /(\d+)\s+\d+\s+obj\b/g; let m;
+  while((m = re.exec(s))){
+    const num = +m[1];
+    const end = s.indexOf('endobj', m.index);
+    if(end < 0) continue;
+    const body = s.slice(m.index + m[0].length, end);
+    const st = body.indexOf('stream');
+    objs[num] = { dict: st >= 0 ? body.slice(0, st) : body,
+      streamAt: st >= 0 ? (m.index + m[0].length + st) : -1 };
+  }
+  /* unpack object streams */
+  for(const num of Object.keys(objs)){
+    const o = objs[num];
+    if(o.streamAt < 0 || !/\/Type\s*\/ObjStm/.test(o.dict)) continue;
+    let j = o.streamAt + 6;
+    if(s[j] === '\r') j++;
+    if(s[j] === '\n') j++;
+    const e = s.indexOf('endstream', j);
+    if(e < 0) continue;
+    let dec;
+    try{ dec = bytesToLatin1(await inflateBytes(bytes.subarray(j, e))); }catch(err){ continue; }
+    const n = +(/\/N\s+(\d+)/.exec(o.dict) || [])[1] || 0;
+    const first = +(/\/First\s+(\d+)/.exec(o.dict) || [])[1] || 0;
+    const head = dec.slice(0, first).trim().split(/\s+/).map(Number);
+    for(let k = 0; k < n; k++){
+      const onum = head[k * 2], off = head[k * 2 + 1];
+      if(onum == null || off == null) continue;
+      const nextOff = (k + 1 < n) ? head[(k + 1) * 2 + 1] : (dec.length - first);
+      objs[onum] = { dict: dec.slice(first + off, first + nextOff), streamAt:-1 };
+    }
+  }
+  return objs;
+}
+/* resource name (F1, F2 …) -> glyph table */
+async function pdfFontMaps(bytes){
+  const s = bytesToLatin1(bytes);
+  const objs = await pdfObjects(bytes, s);
+  const cmapOf = {};
+  for(const num of Object.keys(objs)){
+    const d = objs[num].dict;
+    if(!/\/Type\s*\/Font/.test(d)) continue;
+    const tu = /\/ToUnicode\s+(\d+)\s+\d+\s+R/.exec(d);
+    if(!tu) continue;
+    const t = objs[+tu[1]];
+    if(!t || t.streamAt < 0) continue;
+    let j = t.streamAt + 6;
+    if(s[j] === '\r') j++;
+    if(s[j] === '\n') j++;
+    const e = s.indexOf('endstream', j);
+    if(e < 0) continue;
+    try{ cmapOf[num] = pdfParseCMap(bytesToLatin1(await inflateBytes(bytes.subarray(j, e)))); }catch(err){}
+  }
+  /* which resource name points at which font object */
+  const byName = {};
+  const fr = /\/Font\s*<<([\s\S]{0,4000}?)>>/g; let m;
+  const scan = txt => {
+    let f;
+    const re = /\/Font\s*<<([\s\S]{0,4000}?)>>/g;
+    while((f = re.exec(txt))){
+      const inner = f[1]; const rr = /\/([A-Za-z0-9#]+)\s+(\d+)\s+\d+\s+R/g; let a;
+      while((a = rr.exec(inner))) if(cmapOf[+a[2]]) byName[a[1]] = cmapOf[+a[2]];
+    }
+  };
+  scan(s);
+  Object.keys(objs).forEach(k => scan(objs[k].dict));
+  return byName;
 }
 
 /* ---------- 3. text runs with coordinates ---------- */
@@ -1654,22 +1788,45 @@ function pdfUnescape(s){
   }
   return out;
 }
-const PDF_TOK = /\(((?:[^()\\]|\\[\s\S])*)\)|\[((?:[^\[\]\\]|\\[\s\S])*)\]|(-?\d*\.?\d+)|(Tm|Td|TD|TL|T\*|Tj|TJ|'|")/g;
-function pdfTextRuns(content){
+const PDF_TOK = /\(((?:[^()\\]|\\[\s\S])*)\)|\[((?:[^\[\]\\]|\\[\s\S])*)\]|<([0-9a-fA-F\s]+)>|\/([A-Za-z0-9#]+)\s+([\d.]+)\s+Tf|(-?\d*\.?\d+)|(Tm|Td|TD|TL|T\*|Tj|TJ|'|")/g;
+function pdfTextRuns(content, fonts){
+  fonts = fonts || {};
   const items = [];
   const blocks = content.split(/\bBT\b/).slice(1);
   blocks.forEach(whole => {
     const blk = whole.split(/\bET\b/)[0];
-    let lx = 0, ly = 0, tx = 0, ty = 0, lead = 0, nums = [], pend = null, m;
+    let lx = 0, ly = 0, tx = 0, ty = 0, lead = 0, nums = [], pend = null, m, font = null, size = 9;
+    /* glyph codes -> letters, using the table of whichever font is selected */
+    const unhex = h => {
+      const clean = String(h).replace(/\s+/g, '');
+      let out = '';
+      if(font && font.map){
+        const w = (font.width || 2) * 2;
+        for(let i = 0; i + w <= clean.length; i += w){
+          const ch = font.map[parseInt(clean.substr(i, w), 16)];
+          if(ch !== undefined) out += ch;
+        }
+        if(out) return out;
+      }
+      /* A font with no translation table is usually a plain one, where the
+         codes are the characters themselves. */
+      for(let i = 0; i + 1 < clean.length; i += 2){
+        const c = parseInt(clean.substr(i, 2), 16);
+        if(c >= 32 && c < 255) out += String.fromCharCode(c);
+      }
+      return out;
+    };
     PDF_TOK.lastIndex = 0;
     while((m = PDF_TOK.exec(blk))){
-      const lit = m[1], arr = m[2], num = m[3], op = m[4];
+      const lit = m[1], arr = m[2], hex = m[3], fname = m[4], fsz = m[5], num = m[6], op = m[7];
+      if(fname !== undefined){ font = fonts[fname] || null; size = parseFloat(fsz) || size; continue; }
       if(num !== undefined){ nums.push(parseFloat(num)); continue; }
       if(lit !== undefined){ pend = pdfUnescape(lit); continue; }
+      if(hex !== undefined){ pend = unhex(hex); continue; }
       if(arr !== undefined){
         let t = '';
-        const re = /\(((?:[^()\\]|\\[\s\S])*)\)/g; let a;
-        while((a = re.exec(arr))) t += pdfUnescape(a[1]);
+        const re = /\(((?:[^()\\]|\\[\s\S])*)\)|<([0-9a-fA-F\s]+)>/g; let a;
+        while((a = re.exec(arr))) t += (a[1] !== undefined ? pdfUnescape(a[1]) : unhex(a[2]));
         pend = t; continue;
       }
       if(op === 'Tm' && nums.length >= 6){ lx = nums[nums.length - 2]; ly = nums[nums.length - 1]; tx = lx; ty = ly; }
@@ -1681,7 +1838,7 @@ function pdfTextRuns(content){
       else if(op === 'T*'){ ly -= lead; tx = lx; ty = ly; }
       else if(op === 'Tj' || op === 'TJ' || op === "'" || op === '"'){
         if(op === "'" || op === '"'){ ly -= lead; tx = lx; ty = ly; }
-        if(pend && pend.trim()) items.push({ y:Math.round(ty * 10) / 10, x:Math.round(tx * 10) / 10, t:pend.trim() });
+        if(pend && pend.trim()) items.push({ y:Math.round(ty * 10) / 10, x:Math.round(tx * 10) / 10, t:pend.trim(), sz:size });
         pend = null;
       }
       nums = [];
@@ -1701,12 +1858,29 @@ function pdfRows(runs, tol){
     if(last && Math.abs(last.y - r.y) <= tol){ last.cells.push(r); last.y = (last.y * last.n + r.y) / (last.n + 1); last.n++; }
     else rows.push({ y:r.y, n:1, cells:[r] });
   });
-  rows.forEach(r => r.cells.sort((a, b) => a.x - b.x));
+  rows.forEach(r => {
+    r.cells.sort((a, b) => a.x - b.x);
+    /* A driver-printed PDF breaks a word into kerned pieces: "FTS", "-", "01".
+       Join pieces that physically touch, but leave real columns apart. */
+    const out = [];
+    r.cells.forEach(c => {
+      const prev = out[out.length - 1];
+      if(prev){
+        const sz = prev.sz || 9;
+        const endOfPrev = prev.x + prev.t.length * sz * 0.5;
+        if(c.x - endOfPrev < sz * 0.25){ prev.t += c.t; return; }
+      }
+      out.push({ x:c.x, y:c.y, t:c.t, sz:c.sz });
+    });
+    r.cells = out;
+  });
   return rows;
 }
 async function pdfPages(buf){
   const streams = await pdfContentStreams(buf);
-  return streams.map(c => pdfRows(pdfTextRuns(c))).filter(p => p.length);
+  let fonts = {};
+  try{ fonts = await pdfFontMaps(new Uint8Array(buf)); }catch(e){ fonts = {}; }
+  return streams.map(c => pdfRows(pdfTextRuns(c, fonts))).filter(p => p.length);
 }
 
 /* ---------- 4. read a Sage quotation ---------- */
@@ -1757,35 +1931,85 @@ function parseSageQuote(pages){
       }
     }
     /* --- the item table --- */
-    const head = findRow(rows, /^CODE$/i, 120);
+    const head = findRow(rows, /^CODE$/i, 140);
     const foot = findRow(rows, /^(Prepared BY|SUB TOTAL)$/i);
     const top = head ? head.y : 1e9;
     const bottom = foot ? foot.y : -1e9;
+    const pageLines = [];
     rows.forEach(r => {
       if(r.y >= top - 2 || r.y <= bottom + 2) return;
       const nums = numericCells(r);
       const left = r.cells.filter(c => c.x < NUMCOL_X);
       if(nums.length >= 2 && left.length){
         const code = left[0].x < 70 ? left[0].t : '';
-        const desc = left.filter(c => c.x >= (code ? 60 : 0)).map(c => c.t).join(' ').trim();
+        let desc = left.filter(c => c.x >= (code ? 60 : 0)).map(c => c.t).join(' ').trim();
+        let c2 = code;
+        if(code && !desc){
+          /* code and description printed as one run: "FTS-MC00 Main Connectors" */
+          const sp = /^([A-Za-z0-9][\w./\-]*)\s+(.*\S)$/.exec(code);
+          if(sp && /[A-Za-z]{3,}/.test(sp[2])){ c2 = sp[1]; desc = sp[2]; }
+        }
         const v = nums.map(c => cellNum(c.t));
         let qty = v[0], excl = v[1], disc = 0, net, total;
         if(v.length >= 5){ disc = v[2]; net = v[3]; total = v[4]; }
         else if(v.length === 4){ net = v[2]; total = v[3]; }
         else if(v.length === 3){ net = v[1]; total = v[2]; excl = v[1]; }
         else { net = v[1]; total = r2(v[0] * v[1]); }
-        /* trust the printed total: back out the discount if it does not tie up */
-        if(qty && net && Math.abs(r2(qty * net) - total) > 0.05 && Math.abs(total / qty - net) > 0.005){
-          net = r2(total / qty);
-        }
-        if(excl && net && !disc && Math.abs(excl - net) > 0.005) disc = r2((1 - net / excl) * 100);
-        last = { code, desc, qty, excl:excl || net, disc, net, total, detail:[] };
-        lines.push(last);
+        let fixed = false;
+        if(qty && net && Math.abs(r2(qty * net) - total) > 0.05){ net = total / qty; fixed = true; }
+        if(excl && net && Math.abs(excl - net) > 0.005) disc = (1 - net / excl) * 100;
+        last = { code:c2, desc, qty, excl:excl || net, disc, net, total, detail:[], fixed:fixed };
+        lines.push(last); pageLines.push(last);
       } else if(last && left.length && !nums.length){
+        /* a genuine sub-line carries no figures at all and is not a heading */
+        if(r.cells.some(c => c.x > 230 && /\d/.test(c.t))) return;
         const t = rowText(r, null, NUMCOL_X);
-        if(t && !/^Page\b/i.test(t)) last.detail.push(t);
+        if(!t || t.length < 3) return;
+        if(/^(TERMS OF SALE|Prepared BY|Authorised BY|Sign|SUB TOTAL|VAT|TOTAL INC|CODE|DESCRIPTION|QTY|Page\b)/i.test(t)) return;
+        if(/^[\u2022\u25aa]/.test(t) || /spaceandstyle|Finance Act|Withholding VAT/i.test(t)) return;
+        last.detail.push(t);
       }
     });
+    /* Some drivers split the table in two: the money columns print as one block
+       and the codes as another. Pair them in order, and only accept the result
+       if every line's arithmetic ties up. */
+    const cleanNum = c => { const m = /-?[\d,]+(?:\.\d+)?/.exec(String(c.t)); return m ? cellNum(m[0]) : null; };
+    const priceX = (() => {
+      const h = rows.find(r => r.cells.some(c => /^EXCL PRICE$/i.test(c.t)));
+      const c = h && h.cells.find(x => /^EXCL PRICE$/i.test(x.t));
+      return c ? c.x - 12 : 350;
+    })();
+    const FOOTJUNK = /^(TERMS OF SALE|Prepared BY|Authorised BY|Sign|SUB TOTAL|VAT|TOTAL INC|CODE|DESCRIPTION|QTY|EXCL PRICE|DISC|NET PRICE|TOTAL PRICE)/i;
+    const junk = r => { const t = rowText(r, null, 1e9);
+      return !t || /^[\u2022\u25aa]/.test(t) || FOOTJUNK.test(t) || /spaceandstyle|Finance Act|Withholding VAT/i.test(t); };
+    const priceOnly = [], codeOnly = [];
+    rows.forEach(r => {
+      if(junk(r)) return;
+      const totalsRow = r.cells.some(c => /^(SUB TOTAL|VAT|TOTAL INC)$/i.test(c.t));
+      const right = totalsRow ? [] : r.cells.filter(c => c.x >= priceX && cleanNum(c) !== null);
+      const leftish = r.cells.filter(c => c.x < priceX);
+      if(!leftish.length && right.length >= 2){ priceOnly.push(right.map(cleanNum)); return; }
+      if(totalsRow && !r.cells.some(c => c.x < 70 && /[A-Za-z]/.test(c.t))) return;
+      if(right.length) return;
+      const codeCell = leftish.find(c => c.x < 70 && /[A-Za-z]/.test(c.t));
+      const qtyCell = leftish.filter(c => c.x > 230 && cleanNum(c) !== null).pop();
+      if(codeCell && qtyCell) codeOnly.push({ left:leftish, qty:cleanNum(qtyCell) });
+    });
+    if(codeOnly.length && codeOnly.length === priceOnly.length){
+      const ok = codeOnly.every((L, i) => {
+        const v = priceOnly[i], net = v[v.length - 2], total = v[v.length - 1];
+        return net && Math.abs(L.qty * net - total) <= Math.max(1, Math.abs(total) * 0.005);
+      });
+      if(ok) codeOnly.forEach((L, i) => {
+        const v = priceOnly[i], net = v[v.length - 2], total = v[v.length - 1];
+        const excl = v.length >= 3 ? v[0] : net;
+        let code = L.left[0].t, desc = L.left.slice(1).filter(c => cleanNum(c) === null).map(c => c.t).join(' ').trim();
+        if(!desc){ const sp = /^([A-Za-z0-9][\w./\-]*)\s+(.*\S)$/.exec(code);
+          if(sp && /[A-Za-z]{3,}/.test(sp[2])){ code = sp[1]; desc = sp[2]; } }
+        lines.push({ code, desc, qty:L.qty, excl, disc: excl && Math.abs(excl - net) > 0.005 ? (1 - net / excl) * 100 : 0,
+          net, total, detail:[], repaired:true });
+      });
+    }
     /* --- the figures Sage printed, for checking --- */
     const grab = (label) => {
       const row = findRow(rows, new RegExp('^' + label + '$', 'i'));
@@ -1840,6 +2064,7 @@ function importSagePdf(){
       const quotes = parseSagePdf(pages);
       if(!quotes.length) throw new Error('Text was read, but no quotation table was found. Is this a Sage quotation?');
       ui.modal = { type:'pdf', stage:'ready', file:name, quotes:quotes, mode:'quote', toGrand:true,
+        mergeInto:(project.quotes[0] ? project.quotes[0].id : ''), mergeQty:false,
         titles: quotes.map(q => q.quoteNo ? ('Quote ' + q.quoteNo) : 'Imported quote') };
     }catch(e){
       ui.modal = { type:'pdf', stage:'failed', file:name, error:(e && e.message) ? e.message : String(e) };
@@ -1859,7 +2084,7 @@ function sageToQuote(res, title){
   q.date = sageDateToISO(res.meta.date);
   q.showDisc = res.lines.some(l => num(l.disc) > 0);
   q.lines = res.lines.map(l => newLine({
-    code:l.code, desc:l.desc, qty:num(l.qty), excl:num(l.excl), disc:r2(num(l.disc)),
+    code:l.code, desc:l.desc, qty:num(l.qty), excl:num(l.excl), disc:num(l.disc),
     detail:l.detail.join('\n'), detailOpen:l.detail.length > 0
   }));
   return q;
@@ -1892,6 +2117,8 @@ function applyField(el){
   if(d.s === 'modal'){
     const tm = /^title(\d+)$/.exec(d.f || '');
     if(tm && ui.modal && ui.modal.titles){ ui.modal.titles[+tm[1]] = el.value; return; }
+    const nm = /^no(\d+)$/.exec(d.f || '');
+    if(nm && ui.modal){ (ui.modal.nos = ui.modal.nos || [])[+nm[1]] = el.value; return; }
     modalSet(d.f, el); return;
   }
   if(d.s === 'heavyrate'){
@@ -1922,7 +2149,10 @@ function modalSet(f, el){
       m.idx = parseInt(val, 10) || 0; m.rate = hRate(m.cat, HEAVY[m.cat].items[m.idx]);
     } else m[f] = val;
     if(el.dataset.rr) renderModal(); else refreshModalCalc();
-  } else m[f] = val;
+  } else {
+    m[f] = val;
+    if(el.dataset.rr) renderModal();   /* e.g. switching the PDF import between new quote and merge */
+  }
 }
 
 /* ---------- quotes ---------- */
@@ -2174,7 +2404,23 @@ function act(a, el, ev){
     case 'pdf-ok': {
       const m = ui.modal; if(!m || !m.quotes || !m.quotes.length) break;
       const first = m.quotes[0];
-      const cust = r => ({ code:r.meta.code || '', name:r.meta.name || '', location:r.meta.location || '', phone:r.meta.phone || '', pin:r.meta.pin || '' });
+      if(m.mode === 'merge'){
+        const target = project.quotes.find(q => q.id === m.mergeInto) || project.quotes[0];
+        if(!target){ toast('There is no quote to add to'); break; }
+        let added = 0, pooled = 0;
+        m.quotes.forEach(r => sageToQuote(r, '').lines.forEach(l => {
+          const code = String(l.code || '').trim().toLowerCase();
+          const ex = code ? target.lines.find(x => String(x.code || '').trim().toLowerCase() === code) : null;
+          if(m.mergeQty && ex){ ex.qty = r2(num(ex.qty) + num(l.qty)); pooled++; }
+          else { target.lines.push(l); added++; }
+        }));
+        if(m.quotes.some(r => r.lines.some(l => num(l.disc) > 0))) target.showDisc = true;
+        project.activeQuote = target.id;
+        touch(true); ui.modal = null; ui.tab = 'quotes'; render();
+        toast(added + ' lines added to \u201c' + (target.title || 'the quote') + '\u201d' + (pooled ? ', ' + pooled + ' quantities pooled' : ''));
+        break;
+      }
+      const cust = r => ({ code:r.meta.code || m.manualCode || '', name:r.meta.name || m.manualName || '', location:r.meta.location || '', phone:r.meta.phone || '', pin:r.meta.pin || '' });
       if(m.mode === 'project'){
         if(project) saveNow();
         const p = blankProject();
@@ -2189,6 +2435,7 @@ function act(a, el, ev){
       let lines = 0;
       m.quotes.forEach((r, k) => {
         const q = sageToQuote(r, (m.titles || [])[k]);
+        if(!r.quoteNo && (m.nos || [])[k]) q.no = m.nos[k];
         project.quotes.push(q); project.activeQuote = q.id; lines += q.lines.length;
         if(m.toGrand){
           const gi = newGItem('main', q.title || ('Quote ' + (r.quoteNo || '')), { kind:'quote', quoteId:q.id });
